@@ -6,17 +6,89 @@ use std::io::BufReader;
 use serde_json::Map;
 use thiserror::Error;
 
+// Part B hint is "Hello, try XOR with 0x17F".
+const XOR_KEY: u16 = 0x17F;
+
 fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().collect();
 
     assert_eq!(args.len(), 2, "Expected 1 argument: <path to event data>");
 
     let path = &args[1];
-    let json = parse_event_data(path)?;
+    let mut object = parse_event_data(path)?;
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    let fifth_value = figure_fifth_value(&object);
+    let map = object.as_object_mut().unwrap();
+    let value_str = format!("0x{:x}", fifth_value);
+    map.insert("five".to_string(), value_str.into());
+    println!("{}", serde_json::to_string_pretty(&object)?);
 
     Ok(())
+}
+
+/// Computes the fifth value and returns it
+///
+///
+///
+/// Prints a debug print to stderr, which helped me to figure out what the fifth value could be.
+/// Example output:
+/// ```
+/// one   0x154 0b101010100 43 +
+/// two   0x150 0b101010000 47 /
+/// three 0x14A 0b101001010 53 5
+/// four  0x144 0b101000100 59 ;
+/// ```
+///
+/// It seems to be an increasing sequence of integers (43, 47, 53, 59, ...)
+/// Increments are 4, 6, 6, ...
+///
+/// Simplest rule I could figure out is the following is as follows.
+///     x_{i+2} = x_{i+1} + index_of_first_mismatching_bit(x_i, x_{i+1}) * (i - 1)
+/// Here the function index_of_first_mismatching_bit returns an index starting from 1.
+/// Also i starts from 1.
+/// Example:
+/// x_3 = x_3 + index_of_first_mismatching_bit(x_1, x_2) * 2
+///     = 47 + index_of_first_mismatching_bit(43, 47) * 2
+///     = 47 + 3 * 2
+///     = 53
+/// x_4 = x_3 + index_of_first_mismatching_bit(x_2, x_3) * 3
+///     = 53 + index_of_first_mismatching_bit(47, 53) * 3
+///     = 53 + 2 * 3
+///     = 59
+/// x_5 = x_4 + index_of_first_mismatching_bit(x_3, x_4) * 4
+///     = 59 + index_of_first_mismatching_bit(53, 59) * 4
+///     = 59 + 2 * 4
+///     = 67
+fn figure_fifth_value(object: &serde_json::Value) -> u16 {
+    let object_members = object.as_object().expect("Given value was not an object.");
+
+    let keys = vec!["one", "two", "three", "four"];
+    let mut values = vec![];
+    for key in keys {
+        let value_str = object_members[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("Unexpected value for key \"{}\"", key));
+        let value_str_trimmed = value_str.trim_start_matches("0x");
+        let value = u16::from_str_radix(value_str_trimmed, 16)
+            .unwrap_or_else(|_| panic!("Unexpected value for key \"{}\"", key));
+        let value_xor = value ^ XOR_KEY;
+        eprintln!(
+            "{:5} {} {:#b} xorred:{:#b} {} {}",
+            key,
+            value_str,
+            value,
+            value_xor,
+            value_xor,
+            char::from_u32(value_xor as u32).expect("TODO")
+        );
+        values.push(value_xor);
+    }
+
+    // Compute the fifth value.
+    let three = values[2];
+    let four = values[3];
+    let index_of_first_mismatching_bit = |a: u16, b: u16| (a ^ b).trailing_zeros() as u16 + 1;
+    (four + index_of_first_mismatching_bit(three, four) * 4) ^ XOR_KEY
 }
 
 #[derive(Error, Debug)]
